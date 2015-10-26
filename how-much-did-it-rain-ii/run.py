@@ -1,3 +1,4 @@
+import time
 import os
 import pandas as pd
 import seaborn as sns
@@ -60,8 +61,6 @@ def build_predictions(test, pca, kmeans, model, cluster_size):
     test = pd.concat([test, test_dummies], axis=1)
     return model.predict(X=test[test.columns - ['Id','Expected']])
     
-
-
 def run_cv(sample, cluster_size, n_kfolds):
     kf = cross_validation.KFold(sample.shape[0], n_folds=n_kfolds, shuffle=True)
     mae_sum = 0
@@ -78,22 +77,43 @@ def run_cv(sample, cluster_size, n_kfolds):
     mae_avg = mae_sum / n_kfolds
     print("Expected MAE is: {}".format(mae_avg))
 
+def average_weighted_by_minutes(group):
+    count = group.shape[0]
+    expected_w_avg = 0
+    prev_minute = 0
+    for i in range(0,count):
+        row = group.iloc[i,:]
+        multiplier = row['minutes_past'] - prev_minute
+        prev_minute = row['minutes_past']
+        expected_w_avg += (multiplier * group.iloc[i,:]['Expected'])/60
+    multiplier = 60 - prev_minute
+    expected_w_avg += (multiplier * group.iloc[count-1,:]['Expected'])/60
+    return pd.Series([group.iloc[0,:]['Id'], expected_w_avg ], index = ['Id', 'Expected'])
+
 if __name__ == "__main__":
     sample_size = 100000
     cluster_size = 7
     n_kfolds = 10
-    if os.environ.get('FRESH_SAMPLE') is not None:
-        df = read_data()
-        sample = df[df['Expected'] < 70].sample(sample_size)
-    else:
-        sample = pd.read_csv('input/sample.csv')
+    #if os.environ.get('FRESH_SAMPLE') is not None:
+    #    df = read_data()
+    #    sample = df[df['Expected'] < 70].sample(sample_size)
+    #else:
+    #    sample = pd.read_csv('input/sample.csv')
 
-    if os.environ.get('OUTPUT') is not None:
-        pca_tot, kmeans_tot, model_tot = build_models(df[df['Expected'] < 70], cluster_size)
-        test_tot = pd.read_csv('input/test.csv')
-        test_tot.fillna(0, inplace=True) # Hack
-        test_tot['Expected'] = test_tot['Id'] - test_tot['Id'] # Hack
-        test_tot['Expected'] = build_predictions(test_tot, pca_tot, kmeans_tot, model_tot, cluster_size)
+    print("Read data...")
+    df = read_data()
+    print("Build models...")
+    pca_tot, kmeans_tot, model_tot = build_models(df[df['Expected'] < 70], cluster_size)
+    print("Read test data...")
+    test_tot = pd.read_csv('input/test.csv')
+    test_tot.fillna(0, inplace=True) # Hack
 
-        output = test_tot.groupby('Id')[['Id','Expected']].mean()
-        output.to_csv('output/output_{}.csv'.format(mae_avg), columns=['Expected'])
+    test_tot['Expected'] = test_tot['Id'] - test_tot['Id'] # Hack
+    print("Build predictions...")
+    test_tot['Expected'] = build_predictions(test_tot, pca_tot, kmeans_tot, model_tot, cluster_size)
+
+    print("Summarize output...")
+    output = test_tot.groupby('Id').apply(average_weighted_by_minutes)
+    print("Out to csv...")
+    csv_name = 'output/output_{}.csv'.format(int(time.time()))
+    output.to_csv(csv_name, columns=['Expected'])
